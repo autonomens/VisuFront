@@ -211,31 +211,49 @@ export class Visualizer extends React.Component {
   }
 
   get legends () {
-    const { layersTreeState } = this.props;
+    const { layersTreeState, view } = this.props;
     const { legends } = this.state;
+
     const legendsFromLayersTree = Array.from(layersTreeState.entries())
       .map(([layer, state]) => {
         if (!state.active) return undefined;
         if (layer.sublayers) {
           const selected = state.sublayers.findIndex(active => active);
           const selectedSublayer = layer.sublayers[selected];
-          return selectedSublayer && selectedSublayer.legends && ({
-            title: selectedSublayer.label,
-            legendsCluster: selectedSublayer.legends,
-          });
+          return selectedSublayer && selectedSublayer.legends;
         }
-        return layer.legends && ({
-          title: layer.label,
-          legendsCluster: layer.legends,
-        });
+        return layer.legends;
       })
       .filter(defined => defined)
-      .reduce((accum, { legendsCluster, title }) => [
+      .reduce((accum, legendsCluster) => [
         ...accum,
-        ...legendsCluster.reduce((acc, legend) => [...acc, { title, ...legend }], []),
+        ...legendsCluster.reduce((acc, legend) => [...acc, { ...legend }], []),
       ], []);
 
-    return [...(legends || []), ...(legendsFromLayersTree || [])];
+    const allLegends = [...(legends || []), ...(legendsFromLayersTree || [])];
+
+    try {
+      const iconsList = Object.fromEntries(
+        view.styleImages.map(({ slug, file } = {}) => [slug, file]),
+      );
+
+      // Add style-image-file for each legend item having a style-image
+      allLegends.forEach(({ items = [] }) => {
+        items
+          .filter(legendItem => (legendItem['style-image'] && !legendItem['style-image-file']))
+          .forEach(legendItem => {
+            const iconFile = iconsList[legendItem['style-image']];
+
+            if (iconFile) {
+              legendItem['style-image-file'] = iconFile; // eslint-disable-line no-param-reassign
+            }
+          });
+      });
+    } catch (error) {
+      console.error(error); // eslint-disable-line no-console
+    }
+
+    return allLegends;
   }
 
   get isSearching () {
@@ -313,6 +331,18 @@ export class Visualizer extends React.Component {
     this.updateLayersTree();
   }
 
+  onMapUpdate = () => {
+    // Add a class to the body for easier automatic tools detection
+    document.body.classList.add('tiles-isloaded');
+    this.refreshLayers();
+  }
+
+  onStyleChange = () => {
+    // Update class to the body for easier automatic tools detection
+    document.body.classList.replace('tiles-isloaded', 'tiles-styleupdated');
+    this.refreshLayers();
+  }
+
   resetMap = map => {
     const { initLayersState, setMap } = this.props;
     setMap(map);
@@ -325,6 +355,23 @@ export class Visualizer extends React.Component {
     map.on('zoom', onMapUpdate);
     map.on('updateMap', onMapUpdate);
     map.on('load', () => this.updateLayersTree());
+    map.on('styleimagemissing', ({ id }) => {
+      const { view: { styleImages = [] } = {} } = this.props;
+      const foundImage = styleImages.find(({ slug }) => (slug === id));
+
+      if (foundImage) {
+        map.loadImage(
+          foundImage.file,
+          (error, imageData) => {
+            if (error) {
+              console.error('Unable to loadImage'); // eslint-disable-line no-console
+            } else {
+              map.addImage(id, imageData);
+            }
+          },
+        );
+      }
+    });
     initLayersState();
     map.resize();
   }
@@ -826,7 +873,8 @@ export class Visualizer extends React.Component {
     } = this.state;
 
     const {
-      refreshLayers,
+      onMapUpdate,
+      onStyleChange,
       resetMap, hideDetails, toggleLayersTree,
       legends,
       setLegends,
@@ -961,8 +1009,8 @@ export class Visualizer extends React.Component {
             interactions={interactions}
             legends={legends}
             onMapLoaded={resetMap}
-            onMapUpdate={refreshLayers}
-            onStyleChange={refreshLayers}
+            onMapUpdate={onMapUpdate}
+            onStyleChange={onStyleChange}
             onClusterUpdate={onClusterUpdate}
             translate={t}
             locale={mapLocale}
